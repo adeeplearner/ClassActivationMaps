@@ -31,6 +31,8 @@ def parse_args():
                         help='name of model to use', required=True)
     parser.add_argument('--input_image', type=str,
                         help='path to input image', required=True)
+    parser.add_argument('--save_gif', default=False,
+                        help='save a gif animation', required=False, action='store_true')
     args = parser.parse_args()
 
     assert args.model_name in list(model_name_to_func.keys()), 'Model [%s] not found in supported models in [%s]' % (
@@ -134,18 +136,7 @@ def postprocess_cam(cam_image, image):
     # BGR to RGB (opencv is BGR image, PIL output is RGB)
     cam_image_processed = cam_image_processed[:, :, ::-1]
 
-    # overlay on top of original image
-    alpha = 0.5
-    out_image = (1-alpha) * image + alpha * cam_image_processed
-
-    output_gif = []
-    for al in [x/100. for x in range(50)]:
-        output_gif.append((1-al) * image + al * cam_image_processed)
-
-    for al in reversed([x/100. for x in range(50)]):
-        output_gif.append((1-al) * image + al * cam_image_processed)
-
-    return out_image, output_gif
+    return cam_image_processed
 
 
 if __name__ == '__main__':
@@ -174,6 +165,8 @@ if __name__ == '__main__':
     input_image_pil = Image.open(filename)
     input_image = preprocess_imagenet(input_image_pil).unsqueeze(0)
     input_image = input_image.to(device)
+    
+    input_image_raw_np = np.asarray(input_image_pil)
 
     # run inference with input image
     selidx=0
@@ -183,15 +176,29 @@ if __name__ == '__main__':
         ImageNetLabels.idx_to_class[output_cam_idx[selidx].item()], output_cam_idx[selidx]))
 
     cam_image_raw = output_cam_acti[:, output_cam_idx[selidx].item()].cpu().detach().numpy()
-    out_image, out_image_gif = postprocess_cam(
-        cam_image_raw, np.asarray(input_image_pil))
+    
+    cam_image_processed = postprocess_cam(
+        cam_image_raw, input_image_raw_np)
+
+    # overlay on top of original image
+    alpha = 0.5
+    cam_image_overlayed = (1-alpha) * input_image_raw_np + alpha * cam_image_processed
 
     # save
-    Image.fromarray(out_image.astype(np.uint8)).save(
+    Image.fromarray(cam_image_overlayed.astype(np.uint8)).save(
         os.path.join('results', os.path.basename(args.input_image)))
+    
+    # create gif animation if required
+    if args.save_gif:
+        cam_image_overlayed_gif = []
+        for al in [x/100. for x in range(50)]:
+            cam_image_overlayed_gif.append((1-al) * input_image_raw_np + al * cam_image_processed)
 
-    factor = min([400./x for x in out_image_gif[0].shape[0:2]])
-    out_image_gif = [Image.fromarray(x.astype(np.uint8)).resize([int(factor * s) for s in reversed(x.shape[0:2])])
-                     for x in out_image_gif]
-    out_image_gif[0].save(os.path.join('results', os.path.basename(args.input_image).split('.')[
-                          0] + '.gif'), save_all=True, append_images=out_image_gif[1:], optimize=False, duration=40, loop=0)
+        for al in reversed([x/100. for x in range(50)]):
+            cam_image_overlayed_gif.append((1-al) * input_image_raw_np + al * cam_image_processed)
+
+        factor = min([300./x for x in cam_image_overlayed_gif[0].shape[0:2]])
+        cam_image_overlayed_gif = [Image.fromarray(x.astype(np.uint8)).resize([int(factor * s) for s in reversed(x.shape[0:2])])
+                        for x in cam_image_overlayed_gif]
+        cam_image_overlayed_gif[0].save(os.path.join('results', os.path.basename(args.input_image).split('.')[
+                            0] + '.gif'), save_all=True, append_images=cam_image_overlayed_gif[1:], optimize=True, duration=40, loop=0)
